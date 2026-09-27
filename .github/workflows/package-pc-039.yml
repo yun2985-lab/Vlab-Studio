@@ -1,0 +1,71 @@
+name: Package VOID EYE PC 0.39
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/package-pc-039.yml']
+permissions:
+  contents: write
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore and verify distribution
+        shell: pwsh
+        run: |
+          gh release download pc-v0.31.0-beta.1 --repo yun2985-lab/Vlab-Studio --pattern '*Fast-Setup.exe' --dir incoming
+          gh release download pc-v0.39.0-beta.1 --repo yun2985-lab/Vlab-Studio --pattern '*Update.zip' --dir incoming
+          if ($LASTEXITCODE) { throw 'Download failed' }
+          $base = Get-Item incoming/*Fast-Setup.exe
+          $patch = Get-Item incoming/*Update.zip
+          if ((Get-FileHash $base).Hash.ToLower() -ne '17c85499761e7e6042ea3aaf693b0256b862664bef5af2a8f6b3097e22214646') { throw 'Base hash mismatch' }
+          if ((Get-FileHash $patch).Hash.ToLower() -ne 'bbe1fe8babcd5a78fb602432789d8c0f8108b939c9159526323f36a9144bcac2') { throw 'Patch hash mismatch' }
+          & 7z x $base.FullName -obase -y | Out-Null
+          if ($LASTEXITCODE) { throw 'Base extraction failed' }
+          $exe = @(Get-ChildItem base -Recurse -Filter VoidEye.exe)
+          if ($exe.Count -ne 1) { throw 'Ambiguous executable root' }
+          New-Item -ItemType Directory payload | Out-Null
+          Get-ChildItem $exe[0].Directory.FullName | Where-Object { $_.Name -notmatch '^\$|^unins|^Uninstall' } | Copy-Item -Destination payload -Recurse -Force
+          Expand-Archive $patch.FullName patch
+          Copy-Item patch/VoidEye.exe payload/VoidEye.exe -Force
+          Copy-Item patch/_internal/* payload/_internal -Recurse -Force
+          Copy-Item patch/README-KO.md payload/PC-0.39-README-KO.md
+          foreach ($p in @('payload/VoidEye.exe','payload/_internal/python312.dll','payload/_internal/clip-deps/cv2/cv2.pyd')) { if (!(Test-Path $p)) { throw "Missing $p" } }
+          foreach ($name in @('ffmpeg.exe','ffplay.exe')) { if (!(Get-ChildItem payload -Recurse -Filter $name)) { throw "Missing $name" } }
+          if ((Get-FileHash payload/VoidEye.exe).Hash.ToLower() -ne '2c269d1a67b33e6d56daed81764b6f7267657099e7f7ab01cd78b571b99c61a8') { throw 'Exe mismatch' }
+          Get-ChildItem payload | Select-Object Name,Length
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (!(Test-Path $iscc)) { choco install innosetup --yes --no-progress }
+          & $iscc installer/void-eye-0.39.iss
+          if ($LASTEXITCODE) { throw 'Installer compile failed' }
+      - name: Verify clean Windows installation
+        shell: pwsh
+        run: |
+          $setup = (Get-Item output/*Setup.exe).FullName
+          $dest = Join-Path $env:RUNNER_TEMP 'VoidEye-clean-install'
+          $p = Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=`"$dest`"") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Install failed: $($p.ExitCode)" }
+          $root = (Get-Item payload).FullName
+          $files = @(Get-ChildItem payload -Recurse -File)
+          foreach ($f in $files) {
+            $rel = $f.FullName.Substring($root.Length + 1)
+            $installed = Join-Path $dest $rel
+            if (!(Test-Path $installed) -or (Get-FileHash $installed).Hash -ne (Get-FileHash $f.FullName).Hash) { throw "Installed file mismatch: $rel" }
+          }
+          "PASS: silent Windows installation; $($files.Count) payload files verified by SHA256. Interactive playback, GPU performance and Firebase are not tested." | Set-Content output/Windows-install-validation.txt
+          Get-ChildItem output -File | ForEach-Object { "$((Get-FileHash $_).Hash.ToLower())  $($_.Name)" } | Set-Content output/SHA256SUMS.txt
+      - name: Attach verified installer to draft release
+        shell: pwsh
+        run: |
+          gh release upload pc-v0.39.0-beta.1 output/* --repo yun2985-lab/Vlab-Studio --clobber
+          if ($LASTEXITCODE) { throw 'Upload failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VoidEye-PC-0.39-Windows-Installer
+          path: output/*
