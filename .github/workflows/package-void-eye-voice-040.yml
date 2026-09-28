@@ -133,6 +133,8 @@ jobs:
               }
             }
             if (!$ready) {
+              $startup=Join-Path $env:TEMP 'void-eye-entry-error.txt'
+              if (Test-Path $startup) { Get-Content $startup -Tail 90 }
               Get-Process VoidEye,VLabVoiceHost -ErrorAction SilentlyContinue | Select-Object ProcessName,Id,Path | Format-List
               Get-ChildItem (Join-Path $env:LOCALAPPDATA 'VLab Voice') -ErrorAction SilentlyContinue | Select-Object Name,Length
               foreach ($name in @('voice-bridge.log','voice-host.log','bridge-errors.log')) {
