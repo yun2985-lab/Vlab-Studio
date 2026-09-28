@@ -2,11 +2,9 @@
 
 VOID EYE PC의 Windows 설치 파일을 배포하는 저장소입니다.
 
-## PC 0.39 다운로드
+## PC 0.39 배포 안내
 
-### [Windows 전체 설치파일 다운로드 (약 221.5MB)](https://github.com/yun2985-lab/Vlab-Studio/releases/download/pc-v0.39.0-beta.1/VoidEye-PC-0.39-Full-x64-Setup.exe)
-
-[릴리스 · 업데이트 ZIP · 대응 복구 소스 · 검증 기록](https://github.com/yun2985-lab/Vlab-Studio/releases/tag/pc-v0.39.0-beta.1)
+실행 파일과 업데이트 파일은 저장소의 Releases 영역에 보관합니다. README에는 다운로드 링크를 싣지 않습니다.
 
 Windows x64용 전체 설치본입니다. 기존 설치 없이 사용할 수 있으며 Python 실행 환경, FFmpeg, FFplay와 클립 분석 의존성을 포함합니다. 녹화 영상 용량은 별도입니다.
 
