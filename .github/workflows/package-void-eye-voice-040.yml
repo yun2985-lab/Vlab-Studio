@@ -132,7 +132,15 @@ jobs:
                 } catch { }
               }
             }
-            if (!$ready) { throw 'VOID EYE did not auto-launch Voice Host' }
+            if (!$ready) {
+              Get-Process VoidEye,VLabVoiceHost -ErrorAction SilentlyContinue | Select-Object ProcessName,Id,Path | Format-List
+              Get-ChildItem (Join-Path $env:LOCALAPPDATA 'VLab Voice') -ErrorAction SilentlyContinue | Select-Object Name,Length
+              foreach ($name in @('voice-bridge.log','voice-host.log','bridge-errors.log')) {
+                $log=Join-Path $env:LOCALAPPDATA "VLab Voice/$name"
+                if (Test-Path $log) { Get-Content $log -Tail 60 }
+              }
+              throw 'VOID EYE did not auto-launch Voice Host'
+            }
           } finally { Stop-Process -Id $gui.Id -Force -ErrorAction SilentlyContinue }
           'PASS: Windows silent installation, binary/model hashes, Voice Host API, video clock round-trip, offline STT model load, VOID EYE GUI process startup and automatic Voice Host launch. Actual LoL, five devices, Korean speech and timeline sync unverified.' | Set-Content integration/output/Windows-install-validation.txt
           Get-ChildItem integration/output -File | ForEach-Object {"$((Get-FileHash $_).Hash.ToLower())  $($_.Name)"} | Set-Content integration/output/SHA256SUMS.txt
