@@ -81,7 +81,7 @@ replace["velkozlab_agent.main"]=main_skin
 
 original_desktop=pyz.extract("velkozlab_agent.desktop")
 original_desktop=original_desktop.replace(co_consts=tuple("__preserved_main_disabled__" if x=="__main__" else x for x in original_desktop.co_consts))
-skin=(Path(__file__).resolve().parent / "pc/velkozlab_agent/desktop_skin.py").read_text()
+skin=(Path(__file__).resolve().parent / "pc/velkozlab_agent/desktop_skin.py").read_text(encoding="utf-8")
 wrapper=compile('exec("__ORIGINAL_DESKTOP__")\n'+skin+'\nif __name__ == "__main__": main()\n', 'velkozlab_agent/desktop.py','exec')
 wrapper=wrapper.replace(co_consts=tuple(original_desktop if x=="__ORIGINAL_DESKTOP__" else x for x in wrapper.co_consts))
 replace["velkozlab_agent.desktop"]=wrapper
