@@ -51,12 +51,12 @@ jobs:
           Copy-Item integration/patches/pc/velkozlab_agent/*.py "$restore/pc/velkozlab_agent/" -Force
           python "$restore/rebuild_pc.py"
           if ($LASTEXITCODE) { throw 'Recorder binary reconstruction failed' }
-          & 7z x $setup -ointegration/base -y | Out-Null
-          if ($LASTEXITCODE) { throw '0.39 installer extraction failed' }
-          $old = @(Get-ChildItem integration/base -Recurse -Filter VoidEye.exe)
-          if ($old.Count -ne 1) { throw 'Ambiguous 0.39 executable' }
+          $oldDir = Join-Path $env:RUNNER_TEMP 'VoidEye-0.39-base-install'
+          $installed = Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=`"$oldDir`"") -Wait -PassThru
+          if ($installed.ExitCode -ne 0) { throw "0.39 installation failed: $($installed.ExitCode)" }
+          if (!(Test-Path (Join-Path $oldDir 'VoidEye.exe'))) { throw '0.39 installed EXE missing' }
           New-Item -ItemType Directory -Force integration/payload | Out-Null
-          Get-ChildItem $old[0].Directory.FullName | Where-Object { $_.Name -notmatch '^\$|^unins|^Uninstall' } | Copy-Item -Destination integration/payload -Recurse -Force
+          Get-ChildItem $oldDir | Where-Object { $_.Name -notmatch '^\$|^unins|^Uninstall' } | Copy-Item -Destination integration/payload -Recurse -Force
           Copy-Item "$restore/pc-update/VoidEye.exe" integration/payload/VoidEye.exe -Force
           if (!(Test-Path integration/payload/_internal/python312.dll)) { throw 'Runtime missing' }
           if (!(Get-ChildItem integration/payload -Recurse -Filter ffmpeg.exe)) { throw 'FFmpeg missing' }
