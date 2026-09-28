@@ -13,5 +13,8 @@ if __name__ == '__main__':
         sys.argv.extend(['--recordings', str(base)])
     if '--model' not in sys.argv and os.environ.get('VLAB_VOICE_MODEL'):
         sys.argv.extend(['--model', os.environ['VLAB_VOICE_MODEL']])
-    threading.Timer(3.0, lambda: webbrowser.open('http://127.0.0.1:8790')).start()
+    if '--no-browser' in sys.argv:
+        sys.argv.remove('--no-browser')
+    else:
+        threading.Timer(3.0, lambda: webbrowser.open('http://127.0.0.1:8790')).start()
     main()

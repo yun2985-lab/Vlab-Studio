@@ -1,0 +1,132 @@
+name: Build VOID EYE plus VLab Voice 0.40 Windows
+on:
+  pull_request:
+    paths:
+      - 'vlab-voice/**'
+      - 'integration/**'
+      - '.github/workflows/package-void-eye-voice-040.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'vlab-voice/**'
+      - 'integration/**'
+      - '.github/workflows/package-void-eye-voice-040.yml'
+permissions:
+  contents: write
+jobs:
+  integrated-windows-installer:
+    runs-on: windows-latest
+    timeout-minutes: 70
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Build toolchain and regression tests
+        shell: pwsh
+        run: |
+          python -m pip install -r vlab-voice/requirements.txt pyinstaller==6.16.0 huggingface_hub
+          python -m unittest discover -s integration/tests -v
+          Push-Location vlab-voice
+          python -m unittest discover -s tests -p 'test_objectives.py' -v
+          python -m unittest discover -s tests -p 'test_void_eye_bridge.py' -v
+          Pop-Location
+      - name: Fetch verified prior 0.39 distribution and recovery source
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force integration/incoming | Out-Null
+          gh release download pc-v0.39.0-beta.1 --repo yun2985-lab/Vlab-Studio --pattern '*Performance-Source.zip' --pattern '*Full-x64-Setup.exe' --dir integration/incoming
+          if ($LASTEXITCODE) { throw '0.39 release download failed' }
+          $src = (Get-Item integration/incoming/*Performance-Source.zip).FullName
+          $setup = (Get-Item integration/incoming/*Full-x64-Setup.exe).FullName
+          if ((Get-FileHash $src).Hash.ToLower() -ne 'f51af43e39cf5b11eb45798c7b81eebd739fe2135469fb373f7e3a59ae8cd20f') { throw '0.39 source hash changed' }
+          if ((Get-FileHash $setup).Hash.ToLower() -ne '7ea922bb8661b9a29e08135622be6e42096543e9473606a58acacfa4294b8340') { throw '0.39 installer hash changed' }
+          Expand-Archive $src integration/restore
+          $restore = 'integration/restore/VoidEye-PC-0.39'
+          if (!(Test-Path "$restore/rebuild_pc.py")) { throw 'Recovery source layout changed' }
+          Copy-Item integration/patches/rebuild_pc.py "$restore/rebuild_pc.py" -Force
+          Copy-Item integration/patches/pc/velkozlab_agent/*.py "$restore/pc/velkozlab_agent/" -Force
+          python "$restore/rebuild_pc.py"
+          if ($LASTEXITCODE) { throw 'Recorder binary reconstruction failed' }
+          & 7z x $setup -ointegration/base -y | Out-Null
+          if ($LASTEXITCODE) { throw '0.39 installer extraction failed' }
+          $old = @(Get-ChildItem integration/base -Recurse -Filter VoidEye.exe)
+          if ($old.Count -ne 1) { throw 'Ambiguous 0.39 executable' }
+          New-Item -ItemType Directory -Force integration/payload | Out-Null
+          Get-ChildItem $old[0].Directory.FullName | Where-Object { $_.Name -notmatch '^\$|^unins|^Uninstall' } | Copy-Item -Destination integration/payload -Recurse -Force
+          Copy-Item "$restore/pc-update/VoidEye.exe" integration/payload/VoidEye.exe -Force
+          if (!(Test-Path integration/payload/_internal/python312.dll)) { throw 'Runtime missing' }
+          if (!(Get-ChildItem integration/payload -Recurse -Filter ffmpeg.exe)) { throw 'FFmpeg missing' }
+      - name: Build Voice Host process
+        shell: pwsh
+        working-directory: vlab-voice
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --console --name VLabVoiceHost --collect-all aiortc --collect-all av --collect-all faster_whisper --collect-all ctranslate2 --add-data 'vlab_voice/web;vlab_voice/web' launcher.py
+          if ($LASTEXITCODE) { throw 'Voice Host executable build failed' }
+          New-Item -ItemType Directory -Force ../integration/voice-dist | Out-Null
+          Copy-Item dist/VLabVoiceHost ../integration/voice-dist/VLabVoiceHost -Recurse -Force
+      - name: Bundle pinned multilingual local STT model
+        shell: pwsh
+        run: |
+          @'
+          from huggingface_hub import snapshot_download
+          from faster_whisper import WhisperModel
+          from pathlib import Path
+          import hashlib,json
+          revision='536b0662742c02347bc0e980a01041f333bce120'
+          path=Path('integration/models/faster-whisper-small').resolve()
+          snapshot_download(repo_id='Systran/faster-whisper-small',revision=revision,local_dir=path,
+              allow_patterns=['config.json','model.bin','tokenizer.json','vocabulary.txt','README.md'])
+          for name in ['config.json','model.bin','tokenizer.json']:
+              if not (path/name).is_file():raise RuntimeError(f'Missing {name}')
+          model=WhisperModel(str(path),device='cpu',compute_type='int8',local_files_only=True)
+          del model
+          hashes={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in path.iterdir() if p.is_file() and p.name!='MODEL-SHA256.json'}
+          (path/'MODEL-SHA256.json').write_text(json.dumps(dict(revision=revision,files=hashes),indent=2),encoding='utf-8')
+          print('OFFLINE_MODEL_LOAD_PASS',revision,hashes['model.bin'])
+          '@ | python -
+          if ($LASTEXITCODE) { throw 'Local STT model bundle failed' }
+      - name: Compile combined installer and recovery source
+        shell: pwsh
+        run: |
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (!(Test-Path $iscc)) { choco install innosetup --yes --no-progress }
+          & $iscc integration/installer/void-eye-vlab-voice-040.iss
+          if ($LASTEXITCODE) { throw 'Combined installer compilation failed' }
+          Compress-Archive -Path integration/restore/VoidEye-PC-0.39,vlab-voice, integration/README-KO.md,integration/NOTICE-THIRD-PARTY.txt,integration/installer,integration/smoke_voice.py -DestinationPath integration/output/VoidEye-VLabVoice-0.40-Recovery-Source.zip
+          if ($LASTEXITCODE) { throw 'Source archive failed' }
+      - name: Verify clean Windows installation and offline STT
+        shell: pwsh
+        run: |
+          $setup=(Get-Item integration/output/*Setup.exe).FullName
+          $dest=Join-Path $env:RUNNER_TEMP 'VoidEye-Voice-clean-install'
+          $install=Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=`"$dest`"") -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Install failed: $($install.ExitCode)" }
+          foreach ($name in @('VoidEye.exe','VLabVoiceHost/VLabVoiceHost.exe','models/faster-whisper-small/model.bin')) {if (!(Test-Path (Join-Path $dest $name))) {throw "Installed file missing: $name"}}
+          if ((Get-FileHash (Join-Path $dest 'VoidEye.exe')).Hash -ne (Get-FileHash integration/payload/VoidEye.exe).Hash) { throw 'Recorder EXE hash mismatch' }
+          if ((Get-FileHash (Join-Path $dest 'models/faster-whisper-small/model.bin')).Hash -ne (Get-FileHash integration/models/faster-whisper-small/model.bin).Hash) { throw 'Model hash mismatch' }
+          $model=Join-Path $dest 'models/faster-whisper-small'
+          $state=Join-Path $env:RUNNER_TEMP 'voice-smoke-host.json'
+          $exe=Join-Path $dest 'VLabVoiceHost/VLabVoiceHost.exe'
+          $hostProcess=Start-Process $exe -ArgumentList @('--model',"`"$model`"",'--state-file',"`"$state`"",'--no-browser') -PassThru -WindowStyle Hidden
+          try {
+            $env:VLAB_SMOKE_STATE=$state
+            python integration/smoke_voice.py
+            if ($LASTEXITCODE) { throw 'Installed Host/STT smoke failed' }
+          } finally { Stop-Process -Id $hostProcess.Id -Force -ErrorAction SilentlyContinue }
+          'PASS: Windows silent installation, binary/model hashes, Voice Host API, video clock round-trip and offline STT model load. Actual LoL, Tk button, five devices, Korean speech and timeline sync unverified.' | Set-Content integration/output/Windows-install-validation.txt
+          Get-ChildItem integration/output -File | ForEach-Object {"$((Get-FileHash $_).Hash.ToLower())  $($_.Name)"} | Set-Content integration/output/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VoidEye-VLabVoice-0.40-Beta
+          path: integration/output/*
+          if-no-files-found: error
+      - name: Publish beta release after main passes all checks
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        run: |
+          gh release create pc-v0.40.0-voice-beta.1 integration/output/* --repo yun2985-lab/Vlab-Studio --title 'VOID EYE + VLab Voice 0.40 beta' --notes-file integration/README-KO.md --prerelease
+          if ($LASTEXITCODE) { throw 'GitHub beta release failed' }

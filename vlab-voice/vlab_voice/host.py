@@ -29,9 +29,9 @@ class MixTrack(AudioStreamTrack):
         return frame
 
 class Host:
-    def __init__(self, root, capacity=5, model_path=None):
+    def __init__(self, root, capacity=5, model_path=None, state_file=None):
         if not 1 <= capacity <= 10: raise ValueError('인원 제한은 1~10명입니다.')
-        self.capacity=capacity; self.root=root; self.model_path=model_path
+        self.capacity=capacity; self.root=root; self.model_path=model_path; self.state_file=Path(state_file) if state_file else None
         self.code=secrets.token_hex(6).upper(); self.admin=secrets.token_urlsafe(32)
         self.peers={}; self.session=None; self.stt_task=None; self.lock=asyncio.Lock()
         self.attempts={}; self.events=set(); self.objectives=ObjectiveService()
@@ -143,12 +143,19 @@ class Host:
         if action=='start':
             if self.stt_task and not self.stt_task.done(): raise web.HTTPConflict(text='전사 완료 후 녹음하세요.')
             if self.session and self.session.data['state'] in ('recording','finalizing'): raise web.HTTPConflict(text='이미 녹음 중입니다.')
-            if not any(p['host'] for p in self.peers.values()): raise web.HTTPConflict(text='방장 음성 입장이 필요합니다.')
+            if not any(p['host'] for p in self.peers.values()) and not (body.get('auto_from_void_eye') is True and body.get('origin_monotonic') is not None): raise web.HTTPConflict(text='방장 음성 입장이 필요합니다.')
             try: self.session=Session(self.root,str(body.get('video','')),body.get('origin_monotonic'))
             except (ValueError, TypeError) as e: raise web.HTTPBadRequest(text=str(e))
         elif action=='stop':
             if not self.session or self.session.data['state']!='recording': raise web.HTTPConflict(text='녹음 중이 아닙니다.')
-            self.session.begin_finalize()
+            end=body.get('end_monotonic')
+            if end is not None:
+                try:
+                    end=float(end)
+                    if not __import__('math').isfinite(end) or abs(time.monotonic()-end)>30 or end<self.session.origin:
+                        raise ValueError()
+                except (TypeError,ValueError): raise web.HTTPBadRequest(text='잘못된 녹화 종료 시각입니다.')
+            self.session.begin_finalize(end)
             await self.broadcast()
             # Drain in-flight RTP before sealing files; core trims at the original stop clock.
             await asyncio.sleep(2)
@@ -189,6 +196,21 @@ class Host:
         if not path.exists(): raise web.HTTPNotFound(text='전사 결과가 아직 없습니다.')
         return web.FileResponse(path)
 
+    async def publish_state(self,app):
+        if not self.state_file: return
+        self.state_file.parent.mkdir(parents=True,exist_ok=True)
+        data=dict(code=self.code,admin=self.admin,pid=__import__('os').getpid(),url='http://127.0.0.1:8790')
+        tmp=self.state_file.with_suffix('.tmp')
+        tmp.write_text(json.dumps(data),encoding='utf-8')
+        __import__('os').replace(tmp,self.state_file)
+
+    async def clear_state(self,app):
+        if not self.state_file: return
+        try:
+            data=json.loads(self.state_file.read_text(encoding='utf-8'))
+            if data.get('admin')==self.admin: self.state_file.unlink(missing_ok=True)
+        except (OSError,ValueError): pass
+
     async def close(self,app):
         for uid in list(self.peers): await self.remove(uid)
         if self.session and self.session.data['state'] in ('recording','finalizing'): self.session.stop()
@@ -206,6 +228,8 @@ class Host:
         app.router.add_get('/',index)
         app.router.add_static('/assets/',Path(__file__).parent/'web',show_index=False)
         app.on_startup.append(self.objectives.start)
+        app.on_startup.append(self.publish_state)
+        app.on_shutdown.append(self.clear_state)
         app.on_shutdown.append(self.objectives.close)
         app.on_shutdown.append(self.close)
         return app
@@ -213,12 +237,12 @@ class Host:
 def main():
     p=argparse.ArgumentParser(); p.add_argument('--bind',default='127.0.0.1'); p.add_argument('--port',type=int,default=8790)
     p.add_argument('--capacity',type=int,default=5); p.add_argument('--recordings',default='voice-recordings')
-    p.add_argument('--model'); p.add_argument('--cert'); p.add_argument('--key'); a=p.parse_args()
+    p.add_argument('--model'); p.add_argument('--state-file'); p.add_argument('--cert'); p.add_argument('--key'); a=p.parse_args()
     if a.bind not in ('127.0.0.1','localhost') and not (a.cert and a.key): p.error('외부 접속에는 신뢰할 수 있는 HTTPS 인증서 --cert / --key가 필요합니다.')
     context=None
     if a.cert:
         context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); context.load_cert_chain(a.cert,a.key)
-    host=Host(a.recordings,a.capacity,a.model)
+    host=Host(a.recordings,a.capacity,a.model,a.state_file)
     print('방 코드:',host.code,'\n방장 전용 키 (공유 금지):',host.admin,flush=True)
     web.run_app(host.app(),host=a.bind,port=a.port,ssl_context=context)
 
