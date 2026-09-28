@@ -96,7 +96,7 @@ jobs:
           if (!(Test-Path $iscc)) { choco install innosetup --yes --no-progress }
           & $iscc integration/installer/void-eye-vlab-voice-040.iss
           if ($LASTEXITCODE) { throw 'Combined installer compilation failed' }
-          Compress-Archive -Path integration/restore/VoidEye-PC-0.39,vlab-voice, integration/README-KO.md,integration/NOTICE-THIRD-PARTY.txt,integration/installer,integration/smoke_voice.py -DestinationPath integration/output/VoidEye-VLabVoice-0.40-Recovery-Source.zip
+          Compress-Archive -Path integration/restore/VoidEye-PC-0.39,vlab-voice, integration/README-KO.md,integration/NOTICE-THIRD-PARTY.txt,integration/installer,integration/smoke_voice.py,integration/models/faster-whisper-small/MODEL-SHA256.json -DestinationPath integration/output/VoidEye-VLabVoice-0.40-Recovery-Source.zip
           if ($LASTEXITCODE) { throw 'Source archive failed' }
       - name: Verify clean Windows installation and offline STT
         shell: pwsh
@@ -117,7 +117,24 @@ jobs:
             python integration/smoke_voice.py
             if ($LASTEXITCODE) { throw 'Installed Host/STT smoke failed' }
           } finally { Stop-Process -Id $hostProcess.Id -Force -ErrorAction SilentlyContinue }
-          'PASS: Windows silent installation, binary/model hashes, Voice Host API, video clock round-trip and offline STT model load. Actual LoL, Tk button, five devices, Korean speech and timeline sync unverified.' | Set-Content integration/output/Windows-install-validation.txt
+          Start-Sleep -Seconds 2
+          $gui=Start-Process (Join-Path $dest 'VoidEye.exe') -PassThru -WindowStyle Hidden
+          try {
+            $ready=$false
+            for ($i=0; $i -lt 22; $i++) {
+              Start-Sleep -Seconds 1
+              if ($gui.HasExited) { throw "Installed VOID EYE exited at startup: $($gui.ExitCode)" }
+              $voiceState=Join-Path $env:LOCALAPPDATA 'VLab Voice/host.json'
+              if (Test-Path $voiceState) {
+                try {
+                  $r=Invoke-WebRequest 'http://127.0.0.1:8790/' -TimeoutSec 2
+                  if ($r.StatusCode -eq 200) { $ready=$true; break }
+                } catch { }
+              }
+            }
+            if (!$ready) { throw 'VOID EYE did not auto-launch Voice Host' }
+          } finally { Stop-Process -Id $gui.Id -Force -ErrorAction SilentlyContinue }
+          'PASS: Windows silent installation, binary/model hashes, Voice Host API, video clock round-trip, offline STT model load, VOID EYE GUI process startup and automatic Voice Host launch. Actual LoL, five devices, Korean speech and timeline sync unverified.' | Set-Content integration/output/Windows-install-validation.txt
           Get-ChildItem integration/output -File | ForEach-Object {"$((Get-FileHash $_).Hash.ToLower())  $($_.Name)"} | Set-Content integration/output/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
