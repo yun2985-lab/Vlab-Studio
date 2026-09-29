@@ -19,6 +19,7 @@ jobs:
     timeout-minutes: 70
     env:
       GH_TOKEN: ${{ github.token }}
+      SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -135,7 +136,7 @@ jobs:
           if (!(Test-Path $iscc)) { choco install innosetup --yes --no-progress }
           & $iscc integration/installer/void-eye-vlab-voice-040.iss
           if ($LASTEXITCODE) { throw 'Combined installer compilation failed' }
-          Compress-Archive -Path integration/restore/VoidEye-PC-0.39,vlab-voice, integration/README-KO.md,integration/NOTICE-THIRD-PARTY.txt,integration/installer,integration/smoke_voice.py,integration/models/faster-whisper-small/MODEL-SHA256.json -DestinationPath integration/output/VoidEye-VLabVoice-0.40-Recovery-Source.zip
+          python integration/package_source.py
           if ($LASTEXITCODE) { throw 'Source archive failed' }
       - name: Verify clean Windows installation and offline STT
         shell: pwsh
@@ -190,9 +191,9 @@ jobs:
           name: VoidEye-VLabVoice-0.40-Beta
           path: integration/output/*
           if-no-files-found: error
-      - name: Publish beta release after main passes all checks
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Publish verified integration beta
+        if: github.event_name == 'pull_request' && github.head_ref == 'build/void-eye-vlab-voice-0.40-integration'
         shell: pwsh
         run: |
-          gh release create pc-v0.40.0-voice-beta.1 integration/output/* --repo yun2985-lab/Vlab-Studio --title 'VOID EYE + VLab Voice 0.40 beta' --notes-file integration/README-KO.md --prerelease
+          gh release create pc-v0.40.0-voice-beta.1 integration/output/* --repo yun2985-lab/Vlab-Studio --target $env:SOURCE_REVISION --title 'VOID EYE + VLab Voice 0.40 beta' --notes-file integration/README-KO.md --prerelease
           if ($LASTEXITCODE) { throw 'GitHub beta release failed' }
