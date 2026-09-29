@@ -99,6 +99,35 @@ jobs:
           print('OFFLINE_MODEL_LOAD_PASS',revision,hashes['model.bin'])
           '@ | python -
           if ($LASTEXITCODE) { throw 'Local STT model bundle failed' }
+      - name: Validate GUI Host launch before installer compression
+        shell: pwsh
+        run: |
+          Move-Item integration/voice-dist/VLabVoiceHost integration/payload/VLabVoiceHost
+          Move-Item integration/models integration/payload/models
+          $gui=Start-Process (Resolve-Path integration/payload/VoidEye.exe) -PassThru
+          try {
+            $ready=$false
+            for ($i=0; $i -lt 25; $i++) {
+              Start-Sleep -Seconds 1
+              if ($gui.HasExited) { break }
+              $state=Join-Path $env:LOCALAPPDATA 'VLab Voice/host.json'
+              if (Test-Path $state) {
+                try { $r=Invoke-WebRequest 'http://127.0.0.1:8790/' -TimeoutSec 1; if ($r.StatusCode -eq 200) { $ready=$true; break } } catch {}
+              }
+            }
+            if (!$ready) {
+              foreach ($name in @('void-eye-stack.txt','void-eye-entry-error.txt')) { $p=Join-Path $env:TEMP $name; if (Test-Path $p) { Get-Content $p } }
+              Get-ChildItem (Join-Path $env:LOCALAPPDATA 'VLab Voice') -Filter '*.log' -ErrorAction SilentlyContinue | ForEach-Object { Get-Content $_.FullName -Tail 60 }
+              Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('VoidEye.exe','VLabVoiceHost.exe') } | Select-Object ProcessId,ParentProcessId,CommandLine | Format-List
+              throw 'GUI failed before packaging'
+            }
+          } finally {
+            Get-Process VoidEye,VLabVoiceHost -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+            Move-Item integration/payload/VLabVoiceHost integration/voice-dist/VLabVoiceHost
+            Move-Item integration/payload/models integration/models
+            Remove-Item (Join-Path $env:LOCALAPPDATA 'VLab Voice/host.json') -ErrorAction SilentlyContinue
+          }
       - name: Compile combined installer and recovery source
         shell: pwsh
         run: |

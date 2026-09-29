@@ -91,6 +91,13 @@ replace["velkozlab_agent.desktop"]=wrapper
 entry_blob=reader.extract("entry")
 entry_code=marshal.loads(entry_blob)
 entry_wrapper=compile('''
+import sys, os, tempfile, faulthandler
+from pathlib import Path
+_trace_file = None
+if '--smoke-test' not in sys.argv and '--module' not in sys.argv:
+    _trace_file = open(Path(tempfile.gettempdir(), 'void-eye-stack.txt'), 'w')
+    faulthandler.enable(_trace_file)
+    faulthandler.dump_traceback_later(15, file=_trace_file)
 try:
     exec("__ORIGINAL_ENTRY__")
 except BaseException:

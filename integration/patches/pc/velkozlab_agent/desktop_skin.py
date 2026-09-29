@@ -133,6 +133,9 @@ def _voice_init(self,root,launch_agent=True):
     import subprocess
     voice_exe=BASE/'VLabVoiceHost'/'VLabVoiceHost.exe'
     state=_voice_state()
+    state.parent.mkdir(parents=True,exist_ok=True)
+    with (state.parent/'voice-bridge.log').open('a',encoding='utf-8') as diagnostic:
+        diagnostic.write(f'GUI startup: base={BASE} host_exists={voice_exe.is_file()}\n')
     if voice_exe.is_file():
         import os
         model=BASE/'models'/'faster-whisper-small'
@@ -146,7 +149,9 @@ def _voice_init(self,root,launch_agent=True):
                 self._voice_log=(log_dir/'voice-host.log').open('ab')
                 self._voice_process=subprocess.Popen(cmd,stdout=self._voice_log,stderr=subprocess.STDOUT,
                     creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
-        except OSError:pass
+        except OSError as exc:
+            with (state.parent/'voice-bridge.log').open('a',encoding='utf-8') as diagnostic:
+                diagnostic.write(f'Host launch failed: {exc!r}\n')
     _prior_voice_init(self,root,launch_agent)
     # Separate browser surface for participant consent and per-speaker tracks.
     bar=ttk.Frame(self.shell);bar.pack(fill='x',before=self.content)
