@@ -1,0 +1,70 @@
+name: Build VLab Voice Host Windows installer
+on:
+  pull_request:
+    paths:
+      - 'vlab-voice/**'
+      - '.github/workflows/package-voice-windows.yml'
+permissions:
+  contents: read
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Install and run pipeline tests
+        working-directory: vlab-voice
+        shell: pwsh
+        run: |
+          python -m pip install -r requirements.txt pyinstaller==6.16.0
+          python -m unittest discover -s tests -p 'test_objectives.py' -v
+      - name: Package independent Voice Host executable
+        working-directory: vlab-voice
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --console --name VLabVoiceHost --collect-all aiortc --collect-all av --collect-all faster_whisper --collect-all ctranslate2 --add-data 'vlab_voice/web;vlab_voice/web' launcher.py
+          if ($LASTEXITCODE) { throw 'PyInstaller failed' }
+          if (!(Test-Path dist/VLabVoiceHost/VLabVoiceHost.exe)) { throw 'Executable is absent' }
+      - name: Compile Windows installer
+        working-directory: vlab-voice
+        shell: pwsh
+        run: |
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (!(Test-Path $iscc)) { choco install innosetup --yes --no-progress }
+          & $iscc installer/vlab-voice-host.iss
+          if ($LASTEXITCODE) { throw 'Inno Setup compilation failed' }
+      - name: Install silently and smoke test HTTP
+        working-directory: vlab-voice
+        shell: pwsh
+        run: |
+          $installer = (Get-Item installer-output/VLabVoiceHost-0.3.0-Setup.exe).FullName
+          $dest = Join-Path $env:RUNNER_TEMP 'VLabVoice-clean-install'
+          $install = Start-Process $installer -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=`"$dest`"") -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Installer failed: $($install.ExitCode)" }
+          $exe = Join-Path $dest 'VLabVoiceHost.exe'
+          if (!(Test-Path $exe)) { throw 'Installed EXE missing' }
+          if ((Get-FileHash $exe).Hash -ne (Get-FileHash dist/VLabVoiceHost/VLabVoiceHost.exe).Hash) { throw 'Installed EXE differs' }
+          $server = Start-Process $exe -ArgumentList @('--port','18790') -PassThru -WindowStyle Hidden
+          try {
+            $ready = $false
+            for ($i=0; $i -lt 45; $i++) {
+              Start-Sleep -Seconds 1
+              if ($server.HasExited) { throw "Host process exited: $($server.ExitCode)" }
+              try {
+                $response = Invoke-WebRequest 'http://127.0.0.1:18790/' -TimeoutSec 2
+                if ($response.StatusCode -eq 200 -and $response.Content -match '오브젝트 음성 알림') { $ready = $true; break }
+              } catch { }
+            }
+            if (!$ready) { throw 'Installed Host did not respond with Voice UI' }
+          } finally { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
+          (Get-FileHash $installer).Hash.ToLower() + '  VLabVoiceHost-0.3.0-Setup.exe' | Set-Content installer-output/SHA256SUMS.txt
+          'PASS: Windows silent installation, executable hash, and localhost UI. Live LoL, WebRTC clients, and TTS playback remain unverified.' | Set-Content installer-output/Windows-install-validation.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VLabVoiceHost-0.3.0-Windows-Setup
+          path: vlab-voice/installer-output/*
+          if-no-files-found: error
