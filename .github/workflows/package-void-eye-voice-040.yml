@@ -11,6 +11,9 @@ on:
       - 'vlab-voice/**'
       - 'integration/**'
       - '.github/workflows/package-void-eye-voice-040.yml'
+concurrency:
+  group: reliability-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: write
 jobs:
@@ -191,15 +194,11 @@ jobs:
           } finally { Stop-Process -Id $gui.Id -Force -ErrorAction SilentlyContinue }
           'PASS: Windows silent installation, binary/model hashes, Voice Host API, video clock round-trip, offline STT model load, VOID EYE GUI process startup and automatic Voice Host launch. Actual LoL, five devices, Korean speech and timeline sync unverified.' | Set-Content integration/output/Windows-install-validation.txt
           Get-ChildItem integration/output -File | ForEach-Object {"$((Get-FileHash $_).Hash.ToLower())  $($_.Name)"} | Set-Content integration/output/SHA256SUMS.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: VoidEye-VLabVoice-0.41-Beta
-          path: integration/output/*
-          if-no-files-found: error
       - name: Publish verified integration beta
         if: github.event_name == 'push' && github.ref_name == 'fix/reliability-0.41'
         shell: pwsh
         run: |
           gh release create pc-v0.41.0-reliability-beta.1 integration/output/* --repo yun2985-lab/Vlab-Studio --target $env:SOURCE_REVISION --title 'VOID EYE + VLab Voice 0.41 beta' --notes-file integration/README-KO.md --prerelease
           if ($LASTEXITCODE) { throw 'GitHub beta release failed' }
+
 
