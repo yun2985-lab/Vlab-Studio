@@ -134,6 +134,8 @@ jobs:
       - name: Compile combined installer and recovery source
         shell: pwsh
         run: |
+          python integration/package_source.py --preflight
+          if ($LASTEXITCODE) { throw 'Source preflight failed before installer compression' }
           $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
           if (!(Test-Path $iscc)) { choco install innosetup --yes --no-progress }
           & $iscc integration/installer/void-eye-vlab-voice-040.iss
