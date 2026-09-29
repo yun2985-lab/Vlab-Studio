@@ -60,6 +60,16 @@ jobs:
           Copy-Item "$restore/pc-update/VoidEye.exe" integration/payload/VoidEye.exe -Force
           if (!(Test-Path integration/payload/_internal/python312.dll)) { throw 'Runtime missing' }
           if (!(Get-ChildItem integration/payload -Recurse -Filter ffmpeg.exe)) { throw 'FFmpeg missing' }
+      - name: Check recorder startup before expensive packaging
+        shell: pwsh
+        run: |
+          $err=Join-Path $env:TEMP 'void-eye-entry-error.txt'
+          Remove-Item $err -ErrorAction SilentlyContinue
+          $probe=Start-Process (Resolve-Path integration/payload/VoidEye.exe) -ArgumentList '--smoke-test' -PassThru
+          $finished=$probe.WaitForExit(30000)
+          if (Test-Path $err) { Get-Content $err; Stop-Process -Id $probe.Id -Force -ErrorAction SilentlyContinue; throw 'Recorder startup exception' }
+          if (!$finished) { Stop-Process -Id $probe.Id -Force; throw 'Recorder smoke test timed out' }
+          if (!(Test-Path integration/payload/bundle-smoke-ok.txt)) { throw 'Recorder smoke marker missing' }
       - name: Build Voice Host process
         shell: pwsh
         working-directory: vlab-voice

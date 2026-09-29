@@ -86,6 +86,22 @@ wrapper=compile('exec("__ORIGINAL_DESKTOP__")\n'+skin+'\nif __name__ == "__main_
 wrapper=wrapper.replace(co_consts=tuple(original_desktop if x=="__ORIGINAL_DESKTOP__" else x for x in wrapper.co_consts))
 replace["velkozlab_agent.desktop"]=wrapper
 
+# A windowed PyInstaller bootloader hides stderr. Keep a persistent startup
+# traceback so an import failure can be diagnosed on the installed machine.
+entry_blob=reader.extract("entry")
+entry_code=marshal.loads(entry_blob)
+entry_wrapper=compile('''
+try:
+    exec("__ORIGINAL_ENTRY__")
+except BaseException:
+    import traceback, tempfile
+    from pathlib import Path
+    Path(tempfile.gettempdir(), "void-eye-entry-error.txt").write_text(traceback.format_exc(),encoding="utf-8")
+    raise
+''','entry.py','exec')
+entry_wrapper=entry_wrapper.replace(co_consts=tuple(entry_code if x=="__ORIGINAL_ENTRY__" else x for x in entry_wrapper.co_consts))
+patched_entry=marshal.dumps(entry_wrapper)
+
 # Rebuild PYZ using original compressed blobs for every unchanged module.
 with SOURCE.open("rb") as stream:
     stream.seek(pyz._start_offset)
@@ -111,9 +127,9 @@ assert reader._end_offset == len(raw_exe)
 archive = bytearray()
 entries = []
 for name, (offset, stored, length, compressed, kind) in reader.toc.items():
-    data = (bytes(out_pyz) if name == "PYZ.pyz"
+    data = (bytes(out_pyz) if name == "PYZ.pyz" else (zlib.compress(patched_entry) if compressed else patched_entry) if name == "entry"
             else raw_exe[reader._start_offset + offset:reader._start_offset + offset + stored])
-    entries.append((len(archive), len(data), len(out_pyz) if name == "PYZ.pyz" else length, compressed, kind, name))
+    entries.append((len(archive), len(data), len(out_pyz) if name == "PYZ.pyz" else len(patched_entry) if name == "entry" else length, compressed, kind, name))
     archive.extend(data)
 for option in reader.options:
     entries.append((len(archive), 0, 0, 0, "o", option))
@@ -129,6 +145,7 @@ TARGET.write_bytes(raw_exe[:reader._start_offset] + archive)
 verify = CArchiveReader(str(TARGET))
 assert verify.toc.keys() == reader.toc.keys()
 assert verify.options == reader.options
+assert marshal.loads(verify.extract("entry")).co_code == entry_wrapper.co_code
 new = verify.open_embedded_archive("PYZ.pyz")
 assert set(new.toc)==set(pyz.toc)|set(replace)
 def same_code(a, b):
