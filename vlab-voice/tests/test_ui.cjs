@@ -1,0 +1,24 @@
+const fs=require('fs');const {JSDOM}=require('jsdom');
+const html=fs.readFileSync('vlab_voice/web/shell.html','utf8');
+const dom=new JSDOM(html,{runScripts:'outside-only',url:'http://localhost/'});const w=dom.window;
+w.URL.createObjectURL=()=> 'blob:sample';w.URL.revokeObjectURL=()=>{};
+const root=w.document.getElementById('vlab-voice-app');root.dataset.inline='true';
+w.eval(fs.readFileSync('vlab_voice/web/view.js','utf8'));
+const $=id=>w.document.getElementById(id);$('example').click();
+function check(ok,msg){if(!ok)throw Error(msg)}
+check(w.document.querySelectorAll('.person:not(.empty-person)').length===5,'five participants');
+check(w.document.querySelectorAll('.lane').length===5,'five tracks');
+check(w.document.querySelectorAll('.caption-clip').length===7,'seven caption segments');
+$('caption-text').value='수정한 자막';$('caption-text').dispatchEvent(new w.Event('input'));
+check(w.document.querySelector('.caption-clip').textContent==='수정한 자막','edit updates timeline');
+$('caption-end').value='0';$('caption-end').dispatchEvent(new w.Event('input'));$('save').click();
+check($('notice').textContent.includes('종료'),'invalid time blocked');
+$('caption-end').value='12';$('caption-end').dispatchEvent(new w.Event('input'));$('save').click();
+check($('notice').textContent.includes('저장'),'valid save action');
+$('exit-demo').click();check($('demo-banner').hidden,'demo exits');check(!root.voiceView.isSample(),'sample flag reset');
+check($('start').disabled,'admin control gated while disconnected');
+root.voiceView.state({capacity:5,members:[],state:'finalizing',recorded_tracks:5,elapsed:60,model_ready:true},true);
+check(!$('start').disabled&&$('stop').disabled,'new recording permitted during previous finalization');
+check($('status').textContent.includes('저장 중'),'finalizing label');
+const report={status:'passed',method:'jsdom DOM interaction; not browser layout',participants:5,tracks:5,captionSegments:7,editReflectsInTimeline:true,invalidTimeBlocked:true,exampleModeExit:true,disconnectedHostControlsDisabled:true,nextRecordingDuringFinalization:true,renderedLayout:'unverified; native browser execution unavailable'};
+fs.writeFileSync('ui-verification.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report));dom.window.close();

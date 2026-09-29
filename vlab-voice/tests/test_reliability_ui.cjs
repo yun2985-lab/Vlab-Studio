@@ -1,0 +1,20 @@
+const fs=require('fs'),assert=require('assert'),{JSDOM}=require('jsdom');
+const dom=new JSDOM(fs.readFileSync('vlab_voice/web/index.html','utf8'),{runScripts:'outside-only',url:'http://localhost/'}),w=dom.window;
+w.AbortSignal.timeout=()=>undefined;w.URL.createObjectURL=()=>'';w.URL.revokeObjectURL=()=>{};
+const requests=[];
+w.fetch=async(path,opts)=>{requests.push([path,opts]);return {ok:true,json:async()=>path==='/api/sessions'?{sessions:[{session_id:'saved-1',video:'old.mp4',state:'complete'}],recovery_errors:[]}:path.startsWith('/api/subtitles')?{schema:'vlab.voice.subtitles/1',tracks:[]}:{} }};
+w.eval(fs.readFileSync('vlab_voice/web/view.js','utf8'));
+w.document.getElementById('vlab-voice-app').objectiveView={update(){},current(){return null},feedback(){}};
+w.eval(fs.readFileSync('vlab_voice/web/client.js','utf8'));
+const $=id=>w.document.getElementById(id),v=$('vlab-voice-app').voiceView;
+(async()=>{
+ $('key').value='admin-test';await $('sessions-refresh').onclick();assert.equal($('saved-session').options.length,2);
+ $('saved-session').value='saved-1';$('saved-session').onchange();
+ v.state({capacity:5,members:[],state:'recording',model_ready:true},true);
+ assert(!$('fetch').disabled,'history fetch stays available during next recording');
+ await $('fetch').onclick();assert(requests.at(-1)[0].endsWith('session_id=saved-1'));
+ await $('retry-saved').onclick();assert.equal(JSON.parse(requests.at(-1)[1].body).session_id,'saved-1');
+ v.state({capacity:5,members:[],state:'transcribing',model_ready:true},true);assert(!$('start').disabled);
+ v.state({capacity:5,members:[],state:'recording',model_ready:true},true);assert($('start').disabled);
+ console.log('RELIABILITY_UI_PASS: select/retry/fetch prior session; recording/transcription controls');dom.window.close();
+})().catch(e=>{console.error(e);process.exitCode=1;dom.window.close()});
