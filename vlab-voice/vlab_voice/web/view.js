@@ -21,8 +21,8 @@
     const names={idle:'녹음 대기',recording:'개별 음성 녹음 중',finalizing:'마지막 음성 저장 중',recorded:'녹음 완료 · 전사 대기',transcribing:'로컬 전사 중',complete:'자막 생성 완료',stt_failed:'전사 실패',recording_failed:'녹음 실패'};
     $('status').textContent=names[s.state]||s.state;$('elapsed').textContent=clock(s.elapsed,true);$('track-count').textContent=(s.recorded_tracks||0)+'개';
     $('model-status').textContent=s.model_ready?'경로 지정됨':'모델 미지정';$('record-dot').classList.toggle('active',s.state==='recording'||s.state==='transcribing');
-    $('start').disabled=!admin||['recording','finalizing','transcribing'].includes(s.state);$('stop').disabled=!admin||s.state!=='recording';
-    $('transcribe').disabled=!admin||!s.model_ready||!['recorded','stt_failed'].includes(s.state);$('fetch').disabled=!admin||s.state!=='complete';
+    $('start').disabled=!admin||s.state==='recording';$('stop').disabled=!admin||s.state!=='recording';
+    $('transcribe').disabled=!admin||!s.model_ready||!['recorded','stt_failed'].includes(s.state);$('fetch').disabled=!admin||(!($('saved-session')&&$('saved-session').value)&&s.state!=='complete');
     if(s.error)notify(s.error,true);
   }
   function validate(data){

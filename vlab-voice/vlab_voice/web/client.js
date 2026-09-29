@@ -12,7 +12,18 @@ admin=!!$('key').value;member=await api('/api/offer',{code:$('code').value.trim(
 }catch(e){await leave();v.notify(e.message,true)}};
 $('leave').onclick=leave;$('mute').onclick=()=>{if(!stream)return;const t=stream.getAudioTracks()[0];t.enabled=!t.enabled;$('mute').textContent=t.enabled?'마이크 끄기':'마이크 켜기'};
 for(const action of ['start','stop','transcribe'])$(action).onclick=async()=>{try{await api('/api/control',{action,video:$('videoPath').value},true);await poll()}catch(e){v.notify(e.message,true)}};
-$('fetch').onclick=async()=>{try{v.render(await api('/api/subtitles',null,true));v.notify('화자별 자막을 불러왔습니다.')}catch(e){v.notify(e.message,true)}};
+$('fetch').onclick=async()=>{try{v.render(await api('/api/subtitles'+($('saved-session').value?'?session_id='+encodeURIComponent($('saved-session').value):''),null,true));v.notify('화자별 자막을 불러왔습니다.')}catch(e){v.notify(e.message,true)}};
+$('sessions-refresh').onclick=async()=>{try{
+const data=await api('/api/sessions',null,true);$('saved-session').replaceChildren(new Option('현재 녹음',''));
+for(const session of data.sessions){const label=(session.video.split(/[\\/]/).pop()||session.session_id)+' · '+session.state;
+$('saved-session').add(new Option(label,session.session_id));}
+if(data.recovery_errors.length)v.notify('복구 확인이 필요한 녹음 '+data.recovery_errors.length+'개가 있습니다. 원본 파일은 보존되어 있습니다.',true);
+else v.notify('저장된 녹음 '+data.sessions.length+'개를 확인했습니다.');
+}catch(e){v.notify(e.message,true)}};
+$('saved-session').onchange=()=>{$('fetch').disabled=!$('key').value};
+$('retry-saved').onclick=async()=>{try{if(!$('saved-session').value)throw Error('이전 녹음을 선택하세요.');
+await api('/api/control',{action:'transcribe',session_id:$('saved-session').value},true);v.notify('선택한 녹음을 전사 대기열에 추가했습니다.');
+}catch(e){v.notify(e.message,true)}};
 $('objective-master').onclick=async()=>{try{
 const enabled=!root.objectiveView.current()?.enabled;
 if(enabled&&!$('objective-profile').checked)throw Error('일반/랭크 경기인지 확인해 주세요.');

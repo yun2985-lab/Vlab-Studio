@@ -1,7 +1,7 @@
 [Setup]
 AppId=VoidEyePC
 AppName=VOID EYE + VLab Voice
-AppVersion=0.40.0
+AppVersion=0.41.0
 AppPublisher=VLab Studio
 DefaultDirName={localappdata}\Programs\VoidEye
 DefaultGroupName=VOID EYE
@@ -9,7 +9,7 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..\output
-OutputBaseFilename=VoidEye-VLabVoice-0.40-Full-x64-Setup
+OutputBaseFilename=VoidEye-VLabVoice-0.41-Full-x64-Setup
 Compression=lzma2/fast
 SolidCompression=yes
 WizardStyle=modern
@@ -29,3 +29,4 @@ Source: "..\NOTICE-THIRD-PARTY.txt"; DestDir: "{app}"; Flags: ignoreversion
 [Icons]
 Name: "{group}\VOID EYE + VLab Voice"; Filename: "{app}\VoidEye.exe"; WorkingDir: "{app}"
 Name: "{userdesktop}\VOID EYE + VLab Voice"; Filename: "{app}\VoidEye.exe"; WorkingDir: "{app}"
+

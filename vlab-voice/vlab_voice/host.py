@@ -9,6 +9,7 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, A
 from aiortc.mediastreams import MediaStreamError
 from av import AudioFrame, AudioResampler
 from .core import Session
+from .recovery import restore, RecordingLock
 from .objectives import ObjectiveService, PROFILE
 
 class MixTrack(AudioStreamTrack):
@@ -35,6 +36,12 @@ class Host:
         self.code=secrets.token_hex(6).upper(); self.admin=secrets.token_urlsafe(32)
         self.peers={}; self.session=None; self.stt_task=None; self.lock=asyncio.Lock()
         self.attempts={}; self.events=set(); self.objectives=ObjectiveService()
+        self.recording_lock=RecordingLock(root)
+        self.sessions={};self.captures={};self.pending=deque();self.queued=set();self.transcribing_id=None;self.finalizers={};self.recovery_errors=[]
+        for path in sorted(Path(root).glob('*/session.json'),key=lambda p:p.stat().st_mtime):
+            try:
+                session=restore(path.parent);self.sessions[session.id]=session;self.session=session
+            except Exception as e:self.recovery_errors.append(dict(session_id=path.parent.name,error=str(e)))
 
     def status(self):
         return dict(objectives=self.objectives.clock.status(), capacity=self.capacity, members=[dict(user_id=k,name=p['name'],host=p['host'],
@@ -44,7 +51,9 @@ class Host:
             error=self.session.data.get('error') if self.session else None,
             elapsed=round(time.monotonic()-self.session.origin,1) if self.session and self.session.data['state']=='recording' else (self.session.data.get('duration',self.session.data.get('end_monotonic',self.session.origin)-self.session.origin) if self.session else 0),
             recorded_tracks=len(self.session.tracks) if self.session else 0,
-            model_ready=bool(self.model_path and Path(self.model_path).is_dir()))
+            model_ready=bool(self.model_path and Path(self.model_path).is_dir()),
+            pending_transcriptions=len(self.pending),transcribing_session=self.transcribing_id,
+            recovery_errors=len(self.recovery_errors))
 
     async def broadcast(self):
         for ws in list(self.events):
@@ -69,11 +78,12 @@ class Host:
                         self.peers[uid]['level_at']=time.monotonic()
                     for other,p in self.peers.items():
                         if other != uid: p['mix'].push(uid,samples)
-                    if self.session and self.session.data['state'] in ('recording','finalizing'):
-                        try: self.session.write(uid,self.peers[uid]['name'],samples.tobytes(),stamp)
+                    for session in list(self.captures.values()):
+                        if session.data['state'] not in ('recording','finalizing'):continue
+                        try:session.write(uid,self.peers.get(uid,{}).get('name','참가자'),samples.tobytes(),stamp)
                         except Exception as e:
-                            self.session.stop(); self.session.data['state']='recording_failed'
-                            self.session.data['error']=str(e); self.session.save(); await self.broadcast()
+                            session.stop();session.data['state']='recording_failed'
+                            session.data['error']=str(e);session.save();await self.broadcast()
         except (MediaStreamError, asyncio.CancelledError): pass
 
     async def remove(self, uid):
@@ -138,36 +148,76 @@ class Host:
     async def status_route(self,request):
         self.member(request); return web.json_response(self.status())
 
-    async def control(self,request):
-        self.admin_check(request); body=await request.json(); action=body.get('action')
-        if action=='start':
-            if self.stt_task and not self.stt_task.done(): raise web.HTTPConflict(text='전사 완료 후 녹음하세요.')
-            if self.session and self.session.data['state'] in ('recording','finalizing'): raise web.HTTPConflict(text='이미 녹음 중입니다.')
-            if not any(p['host'] for p in self.peers.values()) and not (body.get('auto_from_void_eye') is True and body.get('origin_monotonic') is not None): raise web.HTTPConflict(text='방장 음성 입장이 필요합니다.')
-            try: self.session=Session(self.root,str(body.get('video','')),body.get('origin_monotonic'))
-            except (ValueError, TypeError) as e: raise web.HTTPBadRequest(text=str(e))
-        elif action=='stop':
-            if not self.session or self.session.data['state']!='recording': raise web.HTTPConflict(text='녹음 중이 아닙니다.')
-            end=body.get('end_monotonic')
-            if end is not None:
-                try:
-                    end=float(end)
-                    if not __import__('math').isfinite(end) or abs(time.monotonic()-end)>30 or end<self.session.origin:
-                        raise ValueError()
-                except (TypeError,ValueError): raise web.HTTPBadRequest(text='잘못된 녹화 종료 시각입니다.')
-            self.session.begin_finalize(end)
+    def enqueue(self, session):
+        if not self.model_path or session.id in self.queued or session.id==self.transcribing_id:return
+        if session.data['state'] not in ('recorded','stt_failed'):return
+        self.queued.add(session.id);self.pending.append(session)
+        if self.stt_task is None or self.stt_task.done():self.stt_task=asyncio.create_task(self.process_queue())
+
+    async def process_queue(self):
+        while self.pending:
+            session=self.pending.popleft();self.queued.discard(session.id)
+            self.transcribing_id=session.id
+            try:await asyncio.to_thread(session.transcribe,self.model_path)
+            except Exception:pass  # Session persists the failure; subsequent jobs still run.
+            finally:self.transcribing_id=None
             await self.broadcast()
-            # Drain in-flight RTP before sealing files; core trims at the original stop clock.
-            await asyncio.sleep(2)
-            self.session.stop()
-            if self.model_path: self.stt_task=asyncio.create_task(self.transcribe())
+
+    async def restore_jobs(self, app):
+        for session in self.sessions.values():
+            if session.data['state']=='recorded':self.enqueue(session)
+
+    async def finalize(self, session):
+        await asyncio.sleep(2)
+        if session.data['state']=='finalizing':session.stop()
+        self.captures.pop(session.id,None);self.enqueue(session)
+        await self.broadcast()
+
+    async def control(self,request):
+        self.admin_check(request);body=await request.json();action=body.get('action')
+        rid=body.get('recording_id')
+        if rid is not None and (not isinstance(rid,str) or not rid or len(rid)>200):raise web.HTTPBadRequest(text='잘못된 경기 ID입니다.')
+        selected=self.sessions.get(str(body.get('session_id','')))
+        if rid is not None:selected=next((s for s in self.sessions.values() if s.data.get('recording_id')==rid),None)
+        if action=='start':
+            if selected is not None:
+                if selected.data['video']!=str(body.get('video','')):raise web.HTTPConflict(text='경기 ID가 다른 영상에 사용되었습니다.')
+                return web.json_response(self.status())
+            if any(s.data['state']=='recording' for s in self.sessions.values()):raise web.HTTPConflict(text='이미 녹음 중입니다.')
+            if not any(p['host'] for p in self.peers.values()) and not (body.get('auto_from_void_eye') is True and body.get('origin_monotonic') is not None):raise web.HTTPConflict(text='방장 음성 입장이 필요합니다.')
+            try:session=Session(self.root,str(body.get('video','')),body.get('origin_monotonic'))
+            except (ValueError,TypeError) as e:raise web.HTTPBadRequest(text=str(e))
+            if rid is not None:session.data['recording_id']=rid;session.save()
+            self.session=session;self.sessions[session.id]=session;self.captures[session.id]=session
+        elif action=='stop':
+            session=selected if rid is not None or body.get('session_id') else self.session
+            if session is None:raise web.HTTPConflict(text='해당 녹음이 없습니다.')
+            if session.id in self.finalizers:
+                await asyncio.shield(self.finalizers[session.id])
+            elif session.data['state']=='recording':
+                end=body.get('end_monotonic')
+                if end is not None:
+                    try:
+                        end=float(end)
+                        if not __import__('math').isfinite(end) or end>time.monotonic()+1 or end<session.origin:raise ValueError()
+                    except (ValueError,TypeError):raise web.HTTPBadRequest(text='잘못된 녹화 종료 시각입니다.')
+                session.begin_finalize(end)
+                task=asyncio.create_task(self.finalize(session));self.finalizers[session.id]=task
+                await asyncio.shield(task)
+            elif rid is None:raise web.HTTPConflict(text='녹음 중이 아닙니다.')
         elif action=='transcribe':
-            if not self.model_path: raise web.HTTPConflict(text='로컬 모델 경로를 지정하세요.')
-            if not self.session or self.session.data['state'] not in ('recorded','stt_failed'): raise web.HTTPConflict(text='전사 가능한 녹음이 없습니다.')
-            if self.stt_task and not self.stt_task.done(): raise web.HTTPConflict()
-            self.stt_task=asyncio.create_task(self.transcribe())
-        else: raise web.HTTPBadRequest()
-        await self.broadcast(); return web.json_response(self.status())
+            session=selected or self.session
+            if not self.model_path:raise web.HTTPConflict(text='로컬 모델 경로를 지정하세요.')
+            if session is None or session.data['state'] not in ('recorded','stt_failed'):raise web.HTTPConflict(text='전사 가능한 녹음이 없습니다.')
+            self.enqueue(session)
+        else:raise web.HTTPBadRequest()
+        await self.broadcast();return web.json_response(self.status())
+
+    async def sessions_route(self,request):
+        self.admin_check(request)
+        return web.json_response(dict(sessions=[dict(session_id=s.id,video=s.data['video'],state=s.data['state'],
+            recovery_notice=s.data.get('recovery_notice'),error=s.data.get('error')) for s in reversed(list(self.sessions.values()))],
+            recovery_errors=self.recovery_errors))
 
     async def objective_control(self,request):
         self.admin_check(request)
@@ -184,15 +234,11 @@ class Host:
         except (ValueError,TypeError) as e: raise web.HTTPBadRequest(text=str(e))
         return web.json_response(self.objectives.clock.status())
 
-    async def transcribe(self):
-        try: await asyncio.to_thread(self.session.transcribe,self.model_path)
-        except Exception: pass  # persisted error shown by status polling
-        await self.broadcast()
-
     async def subtitles(self,request):
         self.admin_check(request)
-        if not self.session: raise web.HTTPNotFound()
-        path=self.session.directory/'subtitles.json'
+        session=self.sessions.get(request.query.get('session_id')) if request.query.get('session_id') else self.session
+        if not session:raise web.HTTPNotFound()
+        path=session.directory/'subtitles.json'
         if not path.exists(): raise web.HTTPNotFound(text='전사 결과가 아직 없습니다.')
         return web.FileResponse(path)
 
@@ -213,8 +259,13 @@ class Host:
 
     async def close(self,app):
         for uid in list(self.peers): await self.remove(uid)
-        if self.session and self.session.data['state'] in ('recording','finalizing'): self.session.stop()
-        if self.stt_task: await self.stt_task
+        if self.finalizers:await asyncio.gather(*self.finalizers.values(),return_exceptions=True)
+        for session in self.sessions.values():
+            if session.data['state']=='recording':session.stop()
+        if self.stt_task:await self.stt_task
+
+    async def release_recordings(self,app):
+        self.recording_lock.close()
 
     def app(self):
         app=web.Application(client_max_size=128*1024)
@@ -224,14 +275,17 @@ class Host:
         app.router.add_post('/api/control',self.control)
         app.router.add_post('/api/objectives',self.objective_control)
         app.router.add_get('/api/subtitles',self.subtitles)
+        app.router.add_get('/api/sessions',self.sessions_route)
         async def index(r): return web.FileResponse(Path(__file__).parent/'web'/'index.html')
         app.router.add_get('/',index)
         app.router.add_static('/assets/',Path(__file__).parent/'web',show_index=False)
         app.on_startup.append(self.objectives.start)
         app.on_startup.append(self.publish_state)
+        app.on_startup.append(self.restore_jobs)
         app.on_shutdown.append(self.clear_state)
         app.on_shutdown.append(self.objectives.close)
         app.on_shutdown.append(self.close)
+        app.on_cleanup.append(self.release_recordings)
         return app
 
 def main():

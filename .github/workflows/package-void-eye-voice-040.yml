@@ -1,4 +1,4 @@
-name: Build VOID EYE plus VLab Voice 0.40 Windows
+name: Build VOID EYE plus VLab Voice 0.41 Windows
 on:
   pull_request:
     paths:
@@ -6,7 +6,7 @@ on:
       - 'integration/**'
       - '.github/workflows/package-void-eye-voice-040.yml'
   push:
-    branches: [main]
+    branches: ['fix/reliability-0.41']
     paths:
       - 'vlab-voice/**'
       - 'integration/**'
@@ -36,6 +36,7 @@ jobs:
           Push-Location vlab-voice
           python -m unittest discover -s tests -p 'test_objectives.py' -v
           python -m unittest discover -s tests -p 'test_void_eye_bridge.py' -v
+          python -m unittest discover -s tests -p 'test_reliability.py' -v
           Pop-Location
       - name: Fetch verified prior 0.39 distribution and recovery source
         shell: pwsh
@@ -192,12 +193,13 @@ jobs:
           Get-ChildItem integration/output -File | ForEach-Object {"$((Get-FileHash $_).Hash.ToLower())  $($_.Name)"} | Set-Content integration/output/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: VoidEye-VLabVoice-0.40-Beta
+          name: VoidEye-VLabVoice-0.41-Beta
           path: integration/output/*
           if-no-files-found: error
       - name: Publish verified integration beta
-        if: github.event_name == 'pull_request' && github.head_ref == 'build/void-eye-vlab-voice-0.40-integration'
+        if: github.event_name == 'push' && github.ref_name == 'fix/reliability-0.41'
         shell: pwsh
         run: |
-          gh release create pc-v0.40.0-voice-beta.1 integration/output/* --repo yun2985-lab/Vlab-Studio --target $env:SOURCE_REVISION --title 'VOID EYE + VLab Voice 0.40 beta' --notes-file integration/README-KO.md --prerelease
+          gh release create pc-v0.41.0-reliability-beta.1 integration/output/* --repo yun2985-lab/Vlab-Studio --target $env:SOURCE_REVISION --title 'VOID EYE + VLab Voice 0.41 beta' --notes-file integration/README-KO.md --prerelease
           if ($LASTEXITCODE) { throw 'GitHub beta release failed' }
+

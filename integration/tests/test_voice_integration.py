@@ -14,7 +14,11 @@ class HookTests(unittest.TestCase):
         r=ns['RecordingManager']();self.assertEqual(r.start('g1'),'STARTED')
         clock=time.monotonic()-1
         self.assertEqual(ns['LiveIndexer'](None,'g1',clock,None),('g1',clock))
+        for _ in range(100):
+            if calls:break
+            time.sleep(.01)
         self.assertEqual(calls[0][0],('start','/recordings/g1.mkv',clock))
+        self.assertEqual(calls[0][1]['recording_id'],'g1')
         self.assertEqual(r.stop('g1'),'STOPPED')
         for _ in range(50):
             if len(calls)==2:break

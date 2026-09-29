@@ -9,15 +9,17 @@ import os
 import threading
 import time
 import urllib.request
+import urllib.error
 from pathlib import Path
 
 STATE=Path(os.environ.get('LOCALAPPDATA',str(Path.home()))) / 'VLab Voice' / 'host.json'
 ERRORS=STATE.with_name('bridge-errors.log')
 
-def _send(action,video='',origin_monotonic=None,end_monotonic=None):
+def _send(action,video='',origin_monotonic=None,end_monotonic=None,recording_id=None):
     data=json.loads(STATE.read_text(encoding='utf-8'))
     if data.get('url')!='http://127.0.0.1:8790':raise ValueError('Unexpected Voice Host address')
     body=dict(action=action,video=str(video))
+    if recording_id is not None:body['recording_id']=str(recording_id)
     if origin_monotonic is not None:
         body['origin_monotonic']=float(origin_monotonic)
         body['auto_from_void_eye']=True
@@ -35,29 +37,32 @@ def _log(action,exc):
 def patch_main(ns,send=_send):
     indexer=ns['LiveIndexer'];manager=ns['RecordingManager']
     original_start=manager.start;original_stop=manager.stop
-    videos={};active=set()
+    videos={};starts={}
+    def retry(action,*args,**kwargs):
+        for attempt in range(8):
+            try:return send(action,*args,**kwargs)
+            except Exception as exc:
+                if attempt==7 or isinstance(exc,urllib.error.HTTPError) and exc.code in (400,401,403,404):
+                    _log(action,exc);return
+                time.sleep(min(2,.25*2**attempt))
     def start(self,sid):
-        result=original_start(self,sid)
-        videos[sid]=str(self.final_path)
-        return result
+        result=original_start(self,sid);videos[sid]=str(self.final_path);return result
     def make_indexer(catalog,sid,capture_clock,preparer):
-        # This is called immediately after a successful recorder.start() and
-        # receives the same monotonic video clock as VOID EYE's live indexer.
         result=indexer(catalog,sid,capture_clock,preparer)
-        try:
-            send('start',videos.get(sid,''),capture_clock)
-            active.add(sid)
-        except Exception as exc:_log('start',exc)
-        return result
+        video=videos.get(sid,'')
+        worker=threading.Thread(target=retry,args=('start',video,capture_clock),
+            kwargs={'recording_id':str(sid)},name='voice-session-start',daemon=False)
+        starts[sid]=worker;worker.start();return result
     def stop(self,sid):
         end_clock=time.monotonic()
         try:return original_stop(self,sid)
         finally:
-            if sid in active:
-                active.remove(sid)
+            starter=starts.pop(sid,None)
+            if starter is not None:
                 def finish():
-                    try:send('stop',end_monotonic=end_clock)
-                    except Exception as exc:_log('stop',exc)
-                threading.Thread(target=finish,name='voice-session-stop',daemon=True).start()
+                    starter.join()
+                    retry('stop',end_monotonic=end_clock,recording_id=str(sid))
+                # Give the bounded stop retries time to finish during normal desktop shutdown.
+                threading.Thread(target=finish,name='voice-session-stop',daemon=False).start()
             videos.pop(sid,None)
     manager.start=start;manager.stop=stop;ns['LiveIndexer']=make_indexer
