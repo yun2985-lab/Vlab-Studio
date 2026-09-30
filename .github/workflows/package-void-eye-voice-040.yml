@@ -1,4 +1,4 @@
-name: Build VOID EYE plus VLab Voice 0.41 Windows
+name: Build VOID EYE plus VLab Voice 0.42 Windows
 on:
   pull_request:
     paths:
@@ -6,7 +6,7 @@ on:
       - 'integration/**'
       - '.github/workflows/package-void-eye-voice-040.yml'
   push:
-    branches: ['fix/reliability-0.41']
+    branches: ['fix/reliability-0.42']
     paths:
       - 'vlab-voice/**'
       - 'integration/**'
@@ -195,10 +195,10 @@ jobs:
           'PASS: Windows silent installation, binary/model hashes, Voice Host API, video clock round-trip, offline STT model load, VOID EYE GUI process startup and automatic Voice Host launch. Actual LoL, five devices, Korean speech and timeline sync unverified.' | Set-Content integration/output/Windows-install-validation.txt
           Get-ChildItem integration/output -File | ForEach-Object {"$((Get-FileHash $_).Hash.ToLower())  $($_.Name)"} | Set-Content integration/output/SHA256SUMS.txt
       - name: Publish verified integration beta
-        if: github.event_name == 'push' && github.ref_name == 'fix/reliability-0.41'
+        if: github.event_name == 'push' && github.ref_name == 'fix/reliability-0.42'
         shell: pwsh
         run: |
-          gh release create pc-v0.41.0-reliability-beta.1 integration/output/* --repo yun2985-lab/Vlab-Studio --target $env:SOURCE_REVISION --title 'VOID EYE + VLab Voice 0.41 beta' --notes-file integration/README-KO.md --prerelease
+          gh release create pc-v0.42.0-reliability-beta.1 integration/output/* --repo yun2985-lab/Vlab-Studio --target $env:SOURCE_REVISION --title 'VOID EYE + VLab Voice 0.42 beta' --notes-file integration/README-KO.md --prerelease
           if ($LASTEXITCODE) { throw 'GitHub beta release failed' }
 
 

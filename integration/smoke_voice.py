@@ -23,10 +23,14 @@ stopped=post(dict(action='stop',end_monotonic=time.monotonic()))
 assert stopped['state'] in ('recorded','transcribing','complete')
 sid=started['session_id']
 session=Path(os.environ['LOCALAPPDATA'])/'VLab Voice'/'recordings'/sid
+def get(route):
+    request=urllib.request.Request(meta['url']+route,headers={'Authorization':'Bearer '+meta['admin']})
+    with urllib.request.urlopen(request,timeout=12) as response:return json.load(response)
 for _ in range(120):
-    data=json.loads((session/'session.json').read_text(encoding='utf-8'))
+    data=next(s for s in get('/api/sessions')['sessions'] if s['session_id']==sid)
     if data['state'] in ('complete','stt_failed'):break
     time.sleep(.5)
 assert data['state']=='complete',data
 assert (session/'subtitles.json').exists()
+get('/api/subtitles?session_id='+sid)
 print('PASS: installed Voice Host UI, recorder clock, start/stop, packaged offline STT model initialization')

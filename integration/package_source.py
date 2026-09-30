@@ -3,7 +3,7 @@ import hashlib, json, os, subprocess, zipfile, sys
 from pathlib import Path
 
 out=Path('integration/output'); out.mkdir(exist_ok=True)
-target=out/'VoidEye-VLabVoice-0.41-Recovery-Source.zip'
+target=out/'VoidEye-VLabVoice-0.42-Recovery-Source.zip'
 revision=os.environ.get('SOURCE_REVISION') or subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
 subprocess.run(['git','archive','--format=zip','--output='+str(target),revision,'vlab-voice','integration','.github/workflows/package-void-eye-voice-040.yml'],check=True)
 with zipfile.ZipFile(target,'a',zipfile.ZIP_DEFLATED) as z:
@@ -17,7 +17,7 @@ with zipfile.ZipFile(target,'r') as z:
     hashes={n:hashlib.sha256(z.read(n)).hexdigest() for n in z.namelist() if not n.endswith('/')}
     setup=next(out.glob('*Setup.exe'),None)
     if setup is None and '--preflight' not in sys.argv: raise RuntimeError('Installer missing')
-    manifest=dict(version='0.41.0',source_revision=revision,installer=setup.name if setup else None,
+    manifest=dict(version='0.42.0',source_revision=revision,installer=setup.name if setup else None,
         installer_sha256=hashlib.file_digest(setup.open('rb'),'sha256').hexdigest() if setup else None,files=hashes,
         source_type='recovery reconstruction; full original recorder source unavailable')
 with zipfile.ZipFile(target,'a',zipfile.ZIP_DEFLATED) as z:

@@ -32,7 +32,7 @@ def _header_art(canvas,width):
 
 def _init(self,root,launch_agent=True):
     _old_init(self,root,launch_agent)
-    root.title('VOID EYE · PC 0.41 — Voice')
+    root.title('VOID EYE · PC 0.42 — Voice')
     root.geometry('1480x960');root.minsize(1120,820)
     old_status=str(self.status.cget('text'))
     children=self.shell.winfo_children()
@@ -56,7 +56,7 @@ def _init(self,root,launch_agent=True):
     self.content.configure(padding=(0,8))
     # Footer belongs to the existing shell and survives review navigation.
     for child in self.shell.winfo_children():
-        if isinstance(child,ttk.Label):child.configure(text='VOID EYE     ›     내 경기, 필요한 순간부터 다시 보기                                     PC 0.41  |  VLab Studio')
+        if isinstance(child,ttk.Label):child.configure(text='VOID EYE     ›     내 경기, 필요한 순간부터 다시 보기                                     PC 0.42  |  VLab Studio')
 
 def _resend(self):
     ids=self.table.selection()
